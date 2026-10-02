@@ -1,0 +1,52 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments & Tools
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.coverage
+
+# Terraform
+# Local .terraform directories
+**/.terraform/
+
+# State files (contains sensitive infra data & plain text secrets)
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Terraform variables file containing secrets
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ignore CLI configuration file
+.terraformrc
+terraform.rc
+
+# OS & IDE generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/

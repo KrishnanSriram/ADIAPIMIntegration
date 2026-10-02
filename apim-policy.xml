@@ -1,0 +1,36 @@
+<!-- API-level policy for the "Document Intelligence" API in APIM.
+     Assumes a load-balanced pool backend named "di-pool" (round-robin, equal weights),
+     where each pool member backend injects its own Ocp-Apim-Subscription-Key header. -->
+<policies>
+    <inbound>
+        <base />
+        <!-- Round-robin every request (POST analyze AND GET result) across the pool -->
+        <set-backend-service backend-id="di-pool" />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+        <!-- Tag which instance served the call, so the test script can show the spread -->
+        <set-header name="x-served-by" exists-action="override">
+            <value>@(context.Request.Url.Host)</value>
+        </set-header>
+        <!-- Rewrite Operation-Location so the client polls through APIM instead of
+             the backend directly. This is exactly what exposes the sticky-session problem:
+             the follow-up GET is round-robined and may land on the OTHER instance. -->
+        <choose>
+            <when condition="@(context.Response.Headers.ContainsKey("Operation-Location"))">
+                <set-header name="Operation-Location" exists-action="override">
+                    <value>@{
+                        var u = new Uri(context.Response.Headers.GetValueOrDefault("Operation-Location"));
+                        return "https://" + context.Request.OriginalUrl.Host + u.PathAndQuery;
+                    }</value>
+                </set-header>
+            </when>
+        </choose>
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>
