@@ -1,0 +1,104 @@
+<policies>
+    <inbound>
+        <base />
+        <set-variable name="backendMap" value="d11=apimsticky-di-1-x7kwd.cognitiveservices.azure.com,d12=apimsticky-di-2-x7kwd.cognitiveservices.azure.com" />
+        <set-variable name="isAnalyze" value="@(context.Request.Method == "POST" && context.Request.OriginalUrl.Path.Contains(":analyze"))" />
+        <set-variable name="attempts" value="@(0)" />
+        <choose>
+            <!-- 1. Submitting a document: let the pool choose among healthy backends -->
+            <when condition="@((bool)context.Variables["isAnalyze"])">
+                <set-backend-service backend-id="di-pool" />
+            </when>
+            <!-- 2. Polling a result: route back to the backend that accepted the document -->
+            <when condition="@(context.Request.Method == "GET" && context.Request.OriginalUrl.Path.Contains("Results/"))">
+                <set-variable name="be" value="@(context.Request.OriginalUrl.Query.GetValueOrDefault("be", ""))" />
+                <choose>
+                    <when condition="@{
+                        var be = (string)context.Variables["be"];
+                        return be != "" && ("," + (string)context.Variables["backendMap"]).Contains("," + be + "=");
+                    }">
+                        <set-query-parameter name="be" exists-action="delete" />
+                        <set-backend-service backend-id="@((string)context.Variables["be"])" />
+                    </when>
+                    <otherwise>
+                        <return-response>
+                            <set-status code="400" reason="Bad Request" />
+                            <set-header name="Content-Type" exists-action="override">
+                                <value>application/json</value>
+                            </set-header>
+                            <set-body>{"error":{"code":"MissingBackendAffinity","message":"Poll using the exact Operation-Location URL returned by the analyze call."}}</set-body>
+                        </return-response>
+                    </otherwise>
+                </choose>
+            </when>
+            <!-- 3. Everything else -->
+            <otherwise>
+                <set-backend-service backend-id="di-pool" />
+            </otherwise>
+        </choose>
+    </inbound>
+    <backend>
+        <!-- Only submissions are retried: a result poll is pinned to one backend and cannot move.
+             401 is in the list only so the demo (wrong key on di-2) triggers it; remove it for real use. -->
+        <retry condition="@((bool)context.Variables["isAnalyze"] && context.Response != null && (context.Response.StatusCode == 401 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500))" count="2" interval="1" first-fast-retry="true">
+            <set-variable name="attempts" value="@((int)context.Variables["attempts"] + 1)" />
+            <forward-request buffer-request-body="true" />
+        </retry>
+    </backend>
+    <outbound>
+        <base />
+        <!-- Work out which backend actually served the call -->
+        <set-variable name="served" value="@{
+            if ((bool)context.Variables["isAnalyze"])
+            {
+                var host = context.Request.Url.Host;
+                foreach (var pair in ((string)context.Variables["backendMap"]).Split(','))
+                {
+                    var kv = pair.Split('=');
+                    if (string.Equals(kv[1], host, StringComparison.OrdinalIgnoreCase)) { return kv[0]; }
+                }
+                return "";
+            }
+            return context.Variables.ContainsKey("be") ? (string)context.Variables["be"] : "pool";
+        }" />
+        <set-header name="x-served-by" exists-action="override">
+            <value>@((string)context.Variables["served"])</value>
+        </set-header>
+        <set-header name="x-attempts" exists-action="override">
+            <value>@(((int)context.Variables["attempts"]).ToString())</value>
+        </set-header>
+        <!-- Point the client back at APIM, carrying the backend marker -->
+        <choose>
+            <when condition="@((bool)context.Variables["isAnalyze"] && context.Response.Headers.ContainsKey("Operation-Location"))">
+                <set-header name="Operation-Location" exists-action="override">
+                    <value>@{
+                        var u = new Uri(context.Response.Headers.GetValueOrDefault("Operation-Location"));
+                        var served = (string)context.Variables["served"];
+                        var url = "https://" + context.Request.OriginalUrl.Host + u.PathAndQuery;
+                        if (served == "") { return url; }
+                        return url + (string.IsNullOrEmpty(u.Query) ? "?" : "&") + "be=" + served;
+                    }</value>
+                </set-header>
+            </when>
+        </choose>
+    </outbound>
+    <on-error>
+        <base />
+        <!-- DEBUG ONLY: expose why the policy failed. Remove these headers once things work. -->
+        <set-header name="x-error-section" exists-action="override">
+            <value>@(context.LastError.Section ?? "")</value>
+        </set-header>
+        <set-header name="x-error-source" exists-action="override">
+            <value>@(context.LastError.Source ?? "")</value>
+        </set-header>
+        <set-header name="x-error-reason" exists-action="override">
+            <value>@(context.LastError.Reason ?? "")</value>
+        </set-header>
+        <set-header name="x-error-message" exists-action="override">
+            <value>@{
+                var m = (context.LastError.Message ?? "").Replace("\r", " ").Replace("\n", " ");
+                return m.Length > 400 ? m.Substring(0, 400) : m;
+            }</value>
+        </set-header>
+    </on-error>
+</policies>
